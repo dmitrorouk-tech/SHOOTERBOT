@@ -2,21 +2,28 @@ import os
 import random
 import time
 import zipfile
+
 from flask import Flask, request
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from midiutil import MIDIFile
 
+# ================== ENV ==================
+
 TOKEN = os.getenv("TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-if not TOKEN or not WEBHOOK_URL:
-    raise ValueError("TOKEN или WEBHOOK_URL не заданы")
+if not TOKEN:
+    raise ValueError("TOKEN не задан")
+if not WEBHOOK_URL:
+    raise ValueError("WEBHOOK_URL не задан")
 
-bot = telebot.TeleBot(TOKEN)
+# ================== BOT + APP ==================
+
+bot = telebot.TeleBot(TOKEN, threaded=False)
 app = Flask(__name__)
 
-# ================== ЖАНРЫ И BPM ==================
+# ================== ЖАНРЫ ==================
 
 GENRES = {
     "Trap": list(range(90, 221)),
@@ -44,7 +51,7 @@ GENRE_EMOJI = {
 
 KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
-# ================== СОСТОЯНИЕ ==================
+# ================== STATE ==================
 
 user_state = {}
 
@@ -57,7 +64,7 @@ def init_user(chat_id):
         "files": []
     }
 
-# ================== КЛАВИАТУРЫ ==================
+# ================== KEYBOARDS ==================
 
 def main_kb():
     kb = InlineKeyboardMarkup(row_width=2)
@@ -72,10 +79,12 @@ def main_kb():
 def genre_kb():
     kb = InlineKeyboardMarkup(row_width=2)
     for g in GENRES:
-        kb.add(InlineKeyboardButton(
-            f"{GENRE_EMOJI[g]} {GENRE_NAMES[g]}",
-            callback_data=f"genre_{g}"
-        ))
+        kb.add(
+            InlineKeyboardButton(
+                f"{GENRE_EMOJI[g]} {GENRE_NAMES[g]}",
+                callback_data=f"genre_{g}"
+            )
+        )
     kb.add(InlineKeyboardButton("⬅ Назад", callback_data="back"))
     return kb
 
@@ -96,7 +105,7 @@ def make_midi(filename, bpm):
     midi = MIDIFile(1)
     midi.addTempo(0, 0, bpm)
 
-    notes = [60, 63, 67]  # простые аккорды
+    notes = [60, 63, 67]
     t = 0
     for _ in range(8):
         for n in notes:
@@ -106,7 +115,7 @@ def make_midi(filename, bpm):
     with open(filename, "wb") as f:
         midi.writeFile(f)
 
-# ================== ОБРАБОТЧИКИ ==================
+# ================== HANDLERS ==================
 
 @bot.message_handler(commands=["start"])
 def start(m):
@@ -114,8 +123,7 @@ def start(m):
     bot.send_message(
         m.chat.id,
         "🎧 Producer MIDI Bot\n"
-        "Жанры, BPM, тональности\n"
-        "Генерация + ZIP пак\n\n"
+        "Жанры • BPM • MIDI • ZIP\n\n"
         "Работаем 👇",
         reply_markup=main_kb()
     )
@@ -148,7 +156,7 @@ def callbacks(c):
 
     elif d.startswith("key_"):
         s["key"] = d.replace("key_", "")
-        bot.send_message(chat_id, f"🎹 Тональность: {s['key']} {s['mode']}")
+        bot.send_message(chat_id, f"🎹 {s['key']} {s['mode']}")
 
     elif d.startswith("mode_"):
         s["mode"] = d.replace("mode_", "")
@@ -160,7 +168,7 @@ def callbacks(c):
     elif d == "back":
         bot.edit_message_reply_markup(chat_id, c.message.message_id, reply_markup=main_kb())
 
-# ================== ГЕНЕРАЦИЯ ==================
+# ================== GENERATION ==================
 
 def generate_and_send(chat_id):
     s = user_state[chat_id]
@@ -169,17 +177,17 @@ def generate_and_send(chat_id):
     make_midi(filename, s["bpm"])
     s["files"].append(filename)
 
-    text = (
+    bot.send_message(
+        chat_id,
         f"{GENRE_EMOJI[s['genre']]} {GENRE_NAMES[s['genre']]}\n"
         f"🎚 {s['bpm']} BPM\n"
         f"🎹 {s['key']} {s['mode']}"
     )
 
-    bot.send_message(chat_id, text)
     with open(filename, "rb") as f:
         bot.send_document(chat_id, f)
 
-# ================== ZIP PACK ==================
+# ================== PACK ==================
 
 def send_pack(chat_id):
     s = user_state[chat_id]
@@ -188,7 +196,8 @@ def send_pack(chat_id):
         return
 
     zip_name = f"{GENRE_NAMES[s['genre']]}_MIDI_Pack_{int(time.time())}.zip"
-    with zipfile.ZipFile(zip_name, "w") as z:
+
+    with zipfile.ZipFile(zip_name, "w", zipfile.ZIP_DEFLATED) as z:
         for f in s["files"]:
             z.write(f)
 
@@ -201,15 +210,19 @@ def send_pack(chat_id):
 
 @app.route("/", methods=["POST"])
 def webhook():
-    bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
+    update = telebot.types.Update.de_json(
+        request.stream.read().decode("utf-8")
+    )
+    bot.process_new_updates([update])
     return "OK", 200
+
+# ================== START ==================
 
 bot.remove_webhook()
 bot.set_webhook(url=WEBHOOK_URL)
 
-# ================== RUN ==================
-
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
 
 
