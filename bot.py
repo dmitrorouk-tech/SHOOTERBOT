@@ -1,20 +1,24 @@
+import os
 import telebot
 from telebot import types
 from midiutil import MIDIFile
 import random
-import os
 
-import os
+# ===== TOKEN FROM ENV =====
 TOKEN = os.getenv("TOKEN")
+if not TOKEN:
+    raise ValueError("TOKEN is not set in environment variables")
 
 bot = telebot.TeleBot(TOKEN)
 
 user_state = {}
 
-# ========= THEORY =========
-SCALES = {
-    "minor": [0, 2, 3, 5, 7, 8, 10],
-    "major": [0, 2, 4, 5, 7, 9, 11]
+# ===== MUSIC DATA =====
+GENRES = {
+    "🔥 Trap": (90, 220),
+    "🩸 Detroit": (175, 220),
+    "🥶 West Coast": (85, 105),
+    "🕺 Club": (95, 115),
 }
 
 KEYS = {
@@ -23,20 +27,17 @@ KEYS = {
     "G#": 56, "A": 57, "A#": 58, "B": 59
 }
 
+SCALES = {
+    "minor": [0, 2, 3, 5, 7, 8, 10],
+    "major": [0, 2, 4, 5, 7, 9, 11]
+}
+
 CHORDS = {
-    "minor": [[0,3,7],[0,5,7],[0,3,10]],
-    "major": [[0,4,7],[0,5,7],[0,4,11]]
+    "minor": [[0,3,7], [0,5,7], [0,3,10]],
+    "major": [[0,4,7], [0,5,7], [0,4,11]]
 }
 
-# ========= GENRES =========
-GENRES = {
-    "🔥 Trap": (90, 220),
-    "🩸 Detroit": (175, 220),
-    "🥶 West Coast": (85, 105),
-    "🕺 Club": (95, 115),
-}
-
-# ========= KEYBOARDS =========
+# ===== KEYBOARDS =====
 def genre_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row("🔥 Trap", "🩸 Detroit")
@@ -54,13 +55,14 @@ def settings_kb(s):
 
 def key_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    for i in range(0,12,2):
-        kb.row(list(KEYS)[i], list(KEYS)[i+1])
+    keys = list(KEYS.keys())
+    for i in range(0, 12, 2):
+        kb.row(keys[i], keys[i+1])
     kb.row("🔁 Scale")
     kb.row("🔙 Back")
     return kb
 
-# ========= MIDI =========
+# ===== MIDI =====
 def generate_midi(s):
     gmin, gmax = GENRES[s["genre"]]
 
@@ -92,14 +94,13 @@ def generate_midi(s):
         midi.addNote(1, 1, note, t, 0.5, 100)
         t += 0.5
 
-    os.makedirs("generated", exist_ok=True)
-    path = f"generated/{s['genre'].replace(' ','_')}_{bpm}.mid"
+    path = "beat.mid"
     with open(path, "wb") as f:
         midi.writeFile(f)
 
     return path, bpm
 
-# ========= HANDLERS =========
+# ===== HANDLERS =====
 @bot.message_handler(commands=["start"])
 def start(m):
     bot.send_message(m.chat.id, "🎧 Choose genre", reply_markup=genre_kb())
@@ -124,8 +125,8 @@ def toggle_chords(m):
 @bot.message_handler(func=lambda m: m.text.startswith("🎚 BPM"))
 def toggle_bpm(m):
     s = user_state[m.chat.id]
-    modes = ["AUTO","LOW","HIGH"]
-    s["bpm_mode"] = modes[(modes.index(s["bpm_mode"])+1)%3]
+    modes = ["AUTO", "LOW", "HIGH"]
+    s["bpm_mode"] = modes[(modes.index(s["bpm_mode"]) + 1) % 3]
     bot.send_message(m.chat.id, "Updated", reply_markup=settings_kb(s))
 
 @bot.message_handler(func=lambda m: m.text.startswith("🎹 Key"))
@@ -141,18 +142,19 @@ def set_key(m):
 @bot.message_handler(func=lambda m: m.text == "🔁 Scale")
 def toggle_scale(m):
     s = user_state[m.chat.id]
-    s["scale"] = "major" if s["scale"]=="minor" else "minor"
+    s["scale"] = "major" if s["scale"] == "minor" else "minor"
     bot.send_message(m.chat.id, "Updated", reply_markup=settings_kb(s))
 
 @bot.message_handler(func=lambda m: m.text == "🎵 GENERATE MIDI")
 def send_midi(m):
     path, bpm = generate_midi(user_state[m.chat.id])
-    with open(path,"rb") as f:
+    with open(path, "rb") as f:
         bot.send_document(m.chat.id, f, caption=f"BPM: {bpm}")
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Back")
 def back(m):
     bot.send_message(m.chat.id, "🎧 Choose genre", reply_markup=genre_kb())
 
-# ========= RUN =========
-bot.infinity_polling()
+# ===== RUN =====
+print("BOT STARTED")
+bot.infinity_polling(skip_pending=True)
