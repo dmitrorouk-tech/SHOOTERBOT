@@ -1,225 +1,147 @@
 import os
 import random
-import time
-import zipfile
-
 from flask import Flask, request
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot import types
 from midiutil import MIDIFile
 
-# ================== ENV ==================
-
 TOKEN = os.getenv("TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-
 if not TOKEN:
-    raise ValueError("TOKEN не задан")
-if not WEBHOOK_URL:
-    raise ValueError("WEBHOOK_URL не задан")
+    raise ValueError("TOKEN is not set")
 
-# ================== BOT + APP ==================
-
-bot = telebot.TeleBot(TOKEN, threaded=False)
+bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# ================== ЖАНРЫ ==================
-
+# ===== ДАННЫЕ =====
 GENRES = {
-    "Trap": list(range(90, 221)),
-    "Detroit": list(range(170, 221)),
-    "Club": list(range(120, 141)),
-    "WestCoast": list(range(80, 116)),
-    "Drill": list(range(135, 146)),
+    "Trap": (90, 220),
+    "Drill": (135, 145),
+    "Detroit Club": (170, 220),
+    "Club": (120, 140),
+    "West Coast": (80, 115)
 }
 
-GENRE_NAMES = {
-    "Trap": "Trap",
-    "Detroit": "Detroit",
-    "Club": "Club",
-    "WestCoast": "West Coast",
-    "Drill": "Drill",
-}
-
-GENRE_EMOJI = {
-    "Trap": "🔥",
-    "Detroit": "🏭",
-    "Club": "🪩",
-    "WestCoast": "🚗",
-    "Drill": "🔫",
-}
-
-KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-
-# ================== STATE ==================
+KEYS = [
+    "C", "C#", "D", "D#", "E", "F",
+    "F#", "G", "G#", "A", "A#", "B"
+]
 
 user_state = {}
 
-def init_user(chat_id):
-    user_state[chat_id] = {
-        "genre": "Trap",
-        "bpm": 140,
-        "key": "C",
-        "mode": "Minor",
-        "files": []
-    }
-
-# ================== KEYBOARDS ==================
-
-def main_kb():
-    kb = InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        InlineKeyboardButton("🎧 Жанр", callback_data="genre"),
-        InlineKeyboardButton("🎲 AUTO", callback_data="auto"),
-        InlineKeyboardButton("🎹 Тональность", callback_data="key"),
-        InlineKeyboardButton("📦 PACK", callback_data="pack"),
-    )
-    return kb
-
-def genre_kb():
-    kb = InlineKeyboardMarkup(row_width=2)
-    for g in GENRES:
-        kb.add(
-            InlineKeyboardButton(
-                f"{GENRE_EMOJI[g]} {GENRE_NAMES[g]}",
-                callback_data=f"genre_{g}"
-            )
-        )
-    kb.add(InlineKeyboardButton("⬅ Назад", callback_data="back"))
-    return kb
-
-def key_kb():
-    kb = InlineKeyboardMarkup(row_width=3)
-    for k in KEYS:
-        kb.add(InlineKeyboardButton(k, callback_data=f"key_{k}"))
-    kb.add(
-        InlineKeyboardButton("Minor", callback_data="mode_Minor"),
-        InlineKeyboardButton("Major", callback_data="mode_Major"),
-        InlineKeyboardButton("⬅ Назад", callback_data="back")
-    )
-    return kb
-
-# ================== MIDI ==================
-
-def make_midi(filename, bpm):
+# ===== MIDI =====
+def generate_midi(bpm, key, genre):
     midi = MIDIFile(1)
     midi.addTempo(0, 0, bpm)
 
-    notes = [60, 63, 67]
-    t = 0
-    for _ in range(8):
-        for n in notes:
-            midi.addNote(0, 0, n, t, 1, 100)
-        t += 1
+    time = 0
+    for _ in range(16):
+        midi.addNote(0, 9, 36, time, 0.5, 100)  # kick
+        midi.addNote(0, 9, 42, time, 0.25, 70)  # hat
+        time += 0.5
 
+    filename = f"{genre}_{bpm}BPM_{key}.mid"
     with open(filename, "wb") as f:
         midi.writeFile(f)
 
-# ================== HANDLERS ==================
+    return filename
 
+# ===== КНОПКИ =====
+def main_keyboard():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    for g in GENRES:
+        kb.add(g)
+    kb.add("🎲 Авто BPM")
+    return kb
+
+def key_keyboard():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=4)
+    for k in KEYS:
+        kb.add(k)
+    kb.add("🎹 СГЕНЕРИРОВАТЬ MIDI")
+    return kb
+
+# ===== START =====
 @bot.message_handler(commands=["start"])
-def start(m):
-    init_user(m.chat.id)
+def start(msg):
+    user_state[msg.chat.id] = {}
     bot.send_message(
-        m.chat.id,
-        "🎧 Producer MIDI Bot\n"
-        "Жанры • BPM • MIDI • ZIP\n\n"
-        "Работаем 👇",
-        reply_markup=main_kb()
+        msg.chat.id,
+        "🎛 MIDI Producer Bot\n\n"
+        "1️⃣ Выбери жанр\n"
+        "2️⃣ Введи BPM или нажми авто\n"
+        "3️⃣ Выбери тональность\n"
+        "4️⃣ Нажми 🎹 СГЕНЕРИРОВАТЬ MIDI",
+        reply_markup=main_keyboard()
     )
 
-@bot.callback_query_handler(func=lambda c: True)
-def callbacks(c):
-    chat_id = c.message.chat.id
-    s = user_state.get(chat_id)
-    d = c.data
+# ===== ЖАНР =====
+@bot.message_handler(func=lambda m: m.text in GENRES)
+def genre(msg):
+    state = user_state.setdefault(msg.chat.id, {})
+    state["genre"] = msg.text
+    bot.send_message(msg.chat.id, f"Жанр выбран: {msg.text}\nВведи BPM цифрами или нажми 🎲 Авто BPM")
 
-    if not s:
-        init_user(chat_id)
-        s = user_state[chat_id]
+# ===== BPM ЦИФРАМИ =====
+@bot.message_handler(func=lambda m: m.text.isdigit())
+def bpm(msg):
+    state = user_state.setdefault(msg.chat.id, {})
+    state["bpm"] = int(msg.text)
+    bot.send_message(msg.chat.id, f"BPM установлен: {msg.text}\nВыбери тональность", reply_markup=key_keyboard())
 
-    if d == "genre":
-        bot.edit_message_reply_markup(chat_id, c.message.message_id, reply_markup=genre_kb())
+# ===== AUTO BPM =====
+@bot.message_handler(func=lambda m: m.text == "🎲 Авто BPM")
+def auto_bpm(msg):
+    state = user_state.setdefault(msg.chat.id, {})
+    genre = state.get("genre")
 
-    elif d.startswith("genre_"):
-        g = d.replace("genre_", "")
-        s["genre"] = g
-        s["bpm"] = random.choice(GENRES[g])
-        bot.send_message(chat_id, f"{GENRE_EMOJI[g]} {GENRE_NAMES[g]} · {s['bpm']} BPM")
-
-    elif d == "auto":
-        s["bpm"] = random.choice(GENRES[s["genre"]])
-        generate_and_send(chat_id)
-
-    elif d == "key":
-        bot.edit_message_reply_markup(chat_id, c.message.message_id, reply_markup=key_kb())
-
-    elif d.startswith("key_"):
-        s["key"] = d.replace("key_", "")
-        bot.send_message(chat_id, f"🎹 {s['key']} {s['mode']}")
-
-    elif d.startswith("mode_"):
-        s["mode"] = d.replace("mode_", "")
-        bot.send_message(chat_id, f"🎹 {s['key']} {s['mode']}")
-
-    elif d == "pack":
-        send_pack(chat_id)
-
-    elif d == "back":
-        bot.edit_message_reply_markup(chat_id, c.message.message_id, reply_markup=main_kb())
-
-# ================== GENERATION ==================
-
-def generate_and_send(chat_id):
-    s = user_state[chat_id]
-
-    filename = f"{GENRE_NAMES[s['genre']]}_{s['bpm']}_BPM_{s['key']}_{s['mode']}.mid"
-    make_midi(filename, s["bpm"])
-    s["files"].append(filename)
-
-    bot.send_message(
-        chat_id,
-        f"{GENRE_EMOJI[s['genre']]} {GENRE_NAMES[s['genre']]}\n"
-        f"🎚 {s['bpm']} BPM\n"
-        f"🎹 {s['key']} {s['mode']}"
-    )
-
-    with open(filename, "rb") as f:
-        bot.send_document(chat_id, f)
-
-# ================== PACK ==================
-
-def send_pack(chat_id):
-    s = user_state[chat_id]
-    if not s["files"]:
-        bot.send_message(chat_id, "📭 Нет файлов для пака")
+    if not genre:
+        bot.send_message(msg.chat.id, "Сначала выбери жанр")
         return
 
-    zip_name = f"{GENRE_NAMES[s['genre']]}_MIDI_Pack_{int(time.time())}.zip"
+    bpm = random.randint(*GENRES[genre])
+    state["bpm"] = bpm
+    bot.send_message(msg.chat.id, f"Авто BPM: {bpm}\nВыбери тональность", reply_markup=key_keyboard())
 
-    with zipfile.ZipFile(zip_name, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in s["files"]:
-            z.write(f)
+# ===== ТОН =====
+@bot.message_handler(func=lambda m: m.text in KEYS)
+def key(msg):
+    state = user_state.setdefault(msg.chat.id, {})
+    state["key"] = msg.text
+    bot.send_message(
+        msg.chat.id,
+        f"Тональность: {msg.text}\n"
+        f"Готово. Нажми 🎹 СГЕНЕРИРОВАТЬ MIDI",
+        reply_markup=key_keyboard()
+    )
 
-    with open(zip_name, "rb") as zf:
-        bot.send_document(chat_id, zf)
+# ===== GENERATE =====
+@bot.message_handler(func=lambda m: m.text == "🎹 СГЕНЕРИРОВАТЬ MIDI")
+def generate(msg):
+    state = user_state.get(msg.chat.id)
 
-    s["files"].clear()
+    if not state or not all(k in state for k in ("genre", "bpm", "key")):
+        bot.send_message(msg.chat.id, "Не все параметры выбраны")
+        return
 
-# ================== WEBHOOK ==================
+    filename = generate_midi(state["bpm"], state["key"], state["genre"])
+    caption = f"{state['genre']} | {state['bpm']} BPM | {state['key']}"
 
+    with open(filename, "rb") as f:
+        bot.send_document(msg.chat.id, f, caption=caption)
+
+    os.remove(filename)
+
+# ===== WEBHOOK =====
 @app.route("/", methods=["POST"])
 def webhook():
-    update = telebot.types.Update.de_json(
-        request.stream.read().decode("utf-8")
-    )
+    update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
     bot.process_new_updates([update])
     return "OK", 200
 
-# ================== START ==================
-
-bot.remove_webhook()
-bot.set_webhook(url=WEBHOOK_URL)
+@app.route("/", methods=["GET"])
+def index():
+    return "Bot is running", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
